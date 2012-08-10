@@ -1,36 +1,74 @@
-import pika
-import sys
+#!/usr/bin/env python
 
-connection = pika.BlockingConnection(pika.ConnectionParameters(
-        host='localhost'))
-channel = connection.channel()
+import demo.utils
 
-channel.exchange_declare(exchange='direct_logs',
-                         type='direct')
+class ReceiveLogsDirect(object):
+    EXCHANGE_NAME = 'direct_logs'
 
-result = channel.queue_declare(exclusive=True)
-print " [*] result = %r" % (result,)
-queue_name = result.method.queue
-print " [*] queue_name = %r" % (queue_name,)
+    def __init__(self, severities):
+        print "ReceiveLogsDirect: Constructing instance"
+        self.severities = severities
+        self.connection = None
 
-severities = sys.argv[1:]
-if not severities:
-    print >> sys.stderr, "Usage: %s [info] [warning] [error]" % (sys.argv[0],)
-    sys.exit(1)
+    def __del__(self):
+        print "ReceiveLogsDirect: Deleting instance"
+        self.destroy()
 
-for severity in severities:
-    bind_ok = channel.queue_bind(exchange='direct_logs',
-                       queue=queue_name,
-                       routing_key=severity)
-    print " [*] bind_ok = %r" % (bind_ok,)
+    def destroy(self):
+        print "ReceiveLogsDirect: destroy"
+        if (self.connection is not None) and (not self.connection.closed):
+            self.connection.close()
 
-print ' [*] Waiting for logs. To exit press CTRL+C'
+    def listen(self):
+        print "ReceiveLogsDirect: listen"
 
-def callback(ch, method, properties, body):
-    print " [x] %r:%r" % (method.routing_key, body,)
+        self.connection = demo.utils.get_connection()
 
-channel.basic_consume(callback,
-                      queue=queue_name,
-                      no_ack=True)
+        self.channel = self.connection.channel()
+        self.channel.exchange_declare(exchange=self.EXCHANGE_NAME, type='direct')
 
-channel.start_consuming()
+        result = self.channel.queue_declare(exclusive=True)
+        print "ReceiveLogsDirect: result = %r" % (result,)
+        queue_name = result.method.queue
+        print "ReceiveLogsDirect: queue_name = %r" % (queue_name,)
+        
+        for severity in self.severities:
+            bind_ok = self.channel.queue_bind(exchange=self.EXCHANGE_NAME, queue=queue_name, routing_key=severity)
+            print "ReceiveLogsDirect: bind_ok = %r" % (bind_ok,)
+
+        self.channel.basic_consume(self.received_message, queue=queue_name, no_ack=True)
+
+        print "ReceiveLogsDirect: Waiting for messages. To exit press CTRL+C"
+
+        try:
+            self.channel.start_consuming()
+        finally:
+            self.destroy()
+
+    def received_message(self, ch, method, properties, body):
+        print "ReceiveLogsDirect: Received %r" % (body,)
+
+def main(args):
+    receive_logs_direct = None
+    try:
+        severities = args[0:]
+        if not severities:
+            print "Usage: %s [info] [warning] [error]" % (args[0],)
+            return 2
+
+        receive_logs_direct = ReceiveLogsDirect(severities)
+        receive_logs_direct.listen()
+        return 0
+    except KeyboardInterrupt:
+        print "Exiting"
+        return 0
+    except Exception, e:
+        print "Exception"
+        print str(e)
+        return 1
+    finally:
+        del receive_logs_direct
+
+if __name__ == '__main__':
+    import sys
+    sys.exit(main(sys.argv[1:]))
